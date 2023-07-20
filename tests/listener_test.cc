@@ -10,10 +10,14 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <sstream>
+
+#include <pistache/endpoint.h>
 #include <pistache/http.h>
 #include <pistache/listener.h>
 class SocketWrapper
@@ -239,6 +243,38 @@ TEST(listener_test, listener_bind_ephemeral_v6_port)
         ASSERT_TRUE(bound_port > (uint16_t)0);
     }
     ASSERT_TRUE(true);
+}
+
+TEST(listener_test, listener_bind_unix_domain)
+{
+    // Avoid name conflict by binding within a fresh temporary directory.
+    using charArray        = char[];
+    charArray nameTemplate = "/tmp/bind_test_XXXXXX";
+    auto tmpDir            = ::mkdtemp(nameTemplate);
+    ASSERT_TRUE(tmpDir != nullptr);
+    auto ss = std::stringstream();
+    ss << tmpDir << "/unix_socket";
+    auto sockName = ss.str().c_str();
+
+    struct sockaddr_un sa;
+    sa.sun_family = AF_UNIX;
+    ::strncpy(sa.sun_path, sockName, sizeof sa.sun_path - 1);
+    // Belt and suspenders...
+    sa.sun_path[sizeof sa.sun_path - 1] = '\0';
+
+    auto address = Pistache::Address::fromUnix(reinterpret_cast<struct sockaddr*>(&sa));
+    auto opts    = Pistache::Http::Endpoint::options().threads(2);
+
+    // The test proper.  The Endpoint constructor creates and binds a
+    // listening socket with the unix domain address.  It should do so without
+    // throwing an exception.
+    auto endpoint = Pistache::Http::Endpoint((address));
+    endpoint.init(opts);
+    endpoint.shutdown();
+
+    // Clean up.
+    (void)::unlink(sockName);
+    (void)::rmdir(tmpDir);
 }
 
 class CloseOnExecTest : public testing::Test

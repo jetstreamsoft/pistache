@@ -20,6 +20,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 
 #ifndef _KERNEL_FASTOPEN
 #define _KERNEL_FASTOPEN
@@ -38,7 +39,7 @@ namespace Pistache
     {
     public:
         // Disable copy and assign.
-        AddrInfo(const AddrInfo&) = delete;
+        AddrInfo(const AddrInfo&)            = delete;
         AddrInfo& operator=(const AddrInfo&) = delete;
 
         // Default construction: do nothing.
@@ -119,6 +120,12 @@ namespace Pistache
         void toNetwork(struct in6_addr*) const;
         // Returns 'true' if the system has IPV6 support, false if not.
         static bool supported();
+        // Exposes the underlying socket address as a constant struct sockaddr
+        // reference.
+        const struct sockaddr& getSockAddr() const
+        {
+            return reinterpret_cast<const struct sockaddr&>(addr_);
+        }
     };
     using Ipv4 = IP;
     using Ipv6 = IP;
@@ -146,28 +153,57 @@ namespace Pistache
     public:
         Address();
         Address(std::string host, Port port);
+
+        // These two constructors can be used to create unix domain addresses
+        // as well as IP-based addresses.  If the addr argument meets one of the
+        // criteria for naming a unix domain address, it will generate such an
+        // address.  Note that matching such a criterion implies that addr would
+        // be invalid as an IP-based address.
+        //
+        // The criteria are:
+        // - addr is empty
+        // - addr[0] == '\0'
+        // - addr contains a '/' charcter
         explicit Address(std::string addr);
         explicit Address(const char* addr);
+
         Address(IP ip, Port port);
 
         Address(const Address& other) = default;
         Address(Address&& other)      = default;
 
         Address& operator=(const Address& other) = default;
-        Address& operator=(Address&& other) = default;
+        Address& operator=(Address&& other)      = default;
 
+        // Supports the AF_UNIX address family as well as AF_INET and AF_INET6.
         static Address fromUnix(struct sockaddr* addr);
 
         std::string host() const;
         Port port() const;
         int family() const;
 
+        // Returns the address length to be used in calls to bind(2); valid
+        // only when family() == AF_UNIX.
+        socklen_t addrLen() const
+        {
+            return addrLen_;
+        }
+
+        // Exposes the underlying socket address as a constant struct sockaddr
+        // reference.
+        const struct sockaddr& getSockAddr() const
+        {
+            return ip_.getSockAddr();
+        }
+
         friend std::ostream& operator<<(std::ostream& os, const Address& address);
 
     private:
         void init(const std::string& addr);
+        bool isUnixDomain(const std::string& addr);
         IP ip_;
         Port port_;
+        socklen_t addrLen_ = 0; // only set/used when ip_.family() == AF_UNIX
     };
 
     std::ostream& operator<<(std::ostream& os, const Address& address);
@@ -223,11 +259,14 @@ namespace Pistache
         }
     };
 
-#define DEFINE_INTEGRAL_SIZE(Int)                                     \
-    template <>                                                       \
-    struct Size<Int>                                                  \
-    {                                                                 \
-        size_t operator()(Int val) const { return digitsCount(val); } \
+#define DEFINE_INTEGRAL_SIZE(Int)        \
+    template <>                          \
+    struct Size<Int>                     \
+    {                                    \
+        size_t operator()(Int val) const \
+        {                                \
+            return digitsCount(val);     \
+        }                                \
     }
 
     DEFINE_INTEGRAL_SIZE(uint8_t);
